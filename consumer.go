@@ -59,7 +59,7 @@ func NewKafkaConsumer(config ConsumerConfig) (*KafkaConsumer, error) {
 		"client.id":               config.ClientID,
 		"enable.auto.commit":      config.EnableAutoCommit,
 		"auto.commit.interval.ms": config.AutoCommitInterval,
-		"broker.adress.family":    "v4",
+		"broker.address.family":   "v4",
 		"auto.offset.reset":       "earliest",
 	})
 
@@ -85,14 +85,32 @@ func (kc *KafkaConsumer) Consume(topic string, handler MessageHandler) error {
 		return fmt.Errorf("message handler can't be nil")
 	}
 
+	kc.handler = handler
 	kc.topic = topic
-	err := kc.consumer.Subscribe(kc.topic, nil)
+	err := kc.consumer.SubscribeTopics([]string{kc.topic}, nil)
 	if err != nil {
 		return fmt.Errorf("Failed to subscribe to topic %s: %w", topic, err)
 	}
 
 	kc.start()
-	slog.Info("Started consuming from topic:", topic)
+	slog.Info("Started consuming from topic", "topic", topic)
+	return nil
+}
+
+func (kc *KafkaConsumer) ConsumeBatch(topic string, handler BatchMessageHandler) error {
+	if handler == nil {
+		return fmt.Errorf("batch message handler can't be nil")
+	}
+
+	kc.batchHandler = handler
+	kc.topic = topic
+	err := kc.consumer.SubscribeTopics([]string{kc.topic}, nil)
+	if err != nil {
+		return fmt.Errorf("Failed to subscribe to topic %s: %w", topic, err)
+	}
+
+	kc.start()
+	slog.Info("Started batch consuming from topic", "topic", topic)
 	return nil
 }
 
@@ -104,7 +122,7 @@ func (kc *KafkaConsumer) start() {
 func (kc *KafkaConsumer) consumeMessages() {
 	defer kc.wg.Done()
 
-	slog.Info("Starting the kafka consmer for topic: %s", kc.topic)
+	slog.Info("Starting the kafka consumer for topic", "topic", kc.topic)
 
 	if kc.batchHandler != nil {
 		kc.wg.Add(1)
@@ -144,10 +162,10 @@ func (kc *KafkaConsumer) consumeMessages() {
 
 func (kc *KafkaConsumer) processMessage(msg *kafka.Message) {
 	if msg.TopicPartition.Error != nil {
-		slog.Error(fmt.Sprintf("Message error from topic %s [%d]: %w",
-			*msg.TopicPartition.Topic,
-			msg.TopicPartition.Offset,
-			msg.TopicPartition.Error))
+		slog.Error("Message error from topic", 
+			"topic", *msg.TopicPartition.Topic,
+			"offset", msg.TopicPartition.Offset,
+			"error", msg.TopicPartition.Error)
 		return
 	}
 
@@ -158,10 +176,10 @@ func (kc *KafkaConsumer) processMessage(msg *kafka.Message) {
 
 func (kc *KafkaConsumer) addToBatch(msg *kafka.Message) {
 	if msg.TopicPartition.Error != nil {
-		slog.Info(fmt.Sprintf("Error Message from the topic: %s [%d]: %v",
-			*msg.TopicPartition.Topic,
-			msg.TopicPartition.Partition,
-			msg.TopicPartition.Error))
+		slog.Error("Error message from topic", 
+			"topic", *msg.TopicPartition.Topic,
+			"partition", msg.TopicPartition.Partition,
+			"error", msg.TopicPartition.Error)
 		return
 	}
 
@@ -219,10 +237,10 @@ func (kc *KafkaConsumer) batchTimeOutChecker() {
 }
 
 func (kc *KafkaConsumer) handleKafkaError(err kafka.Error) {
-	slog.Error("Kafka consumer error: %v (code : %d)", err, err.Code())
+	slog.Error("Kafka consumer error", "error", err, "code", err.Code())
 
 	if err.IsFatal() {
-		slog.Error("FATAL kafka consumer error - may need to restart: %v", err)
+		slog.Error("FATAL kafka consumer error - may need to restart", "error", err)
 	}
 }
 
@@ -233,7 +251,7 @@ func (kc *KafkaConsumer) Close() {
 
 	err := kc.consumer.Close()
 	if err != nil {
-		slog.Error("Error closing the consumer: ", err)
+		slog.Error("Error closing the consumer", "error", err)
 	}
 
 	kc.wg.Wait()

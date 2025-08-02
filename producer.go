@@ -98,10 +98,10 @@ func (kp *KafkaProducer) processDeliveryReport(msg *kafka.Message) {
 }
 
 func (kp *KafkaProducer) handleKafkaError(err kafka.Error) {
-	slog.Error("Kafka Error: %v (code: %d)", err, err.Code())
+	slog.Error("Kafka Error", "error", err, "code", err.Code())
 
 	if err.IsFatal() {
-		slog.Error("FATAL kafka error: producer mas need to restart: %v", err)
+		slog.Error("FATAL kafka error: producer may need to restart", "error", err)
 	}
 }
 
@@ -141,7 +141,7 @@ func (kp *KafkaProducer) Close() {
 	slog.Info("Flushing the remaining messages from kafka producer...")
 	unflushed := kp.producer.Flush(300000)
 	if unflushed > 0 {
-		slog.Error("Failed to flush %d messages", unflushed)
+		slog.Error("Failed to flush messages", "count", unflushed)
 	}
 
 	close(kp.done)

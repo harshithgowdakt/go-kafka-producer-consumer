@@ -6,21 +6,23 @@ import (
 	"time"
 )
 
-type Message struct {
+type ExampleMessage struct {
 	ID        string    `json:"id"`
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"timestamp"`
 }
 
+
 func main() {
 	// Configuration
-	brokers := []string{"localhost:9092"}
+	brokers := "localhost:9092"
 	topic := "test-topic"
 	groupID := "test-consumer-group"
 
 	// Create producer
 	producer, err := NewKafkaProducer(ProducerConfig{
-		Brokers: brokers,
+		Brokers:  brokers,
+		ClientId: "example-producer",
 	})
 	if err != nil {
 		log.Fatalf("Failed to create producer: %v", err)
@@ -29,32 +31,30 @@ func main() {
 
 	// Create consumer
 	consumer, err := NewKafkaConsumer(ConsumerConfig{
-		Brokers:    brokers,
-		GroupID:    groupID,
-		AutoCommit: false,
+		Brokers:            brokers,
+		GroupID:            groupID,
+		ClientID:           "example-consumer",
+		EnableAutoCommit:   false,
+		AutoCommitInterval: 5000,
+		BatchSize:          10,
+		BatchTimeOut:       time.Second * 5,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create consumer: %v", err)
 	}
 	defer consumer.Close()
 
-	// Subscribe to topic
-	err = consumer.Subscribe([]string{topic})
-	if err != nil {
-		log.Fatalf("Failed to subscribe to topic: %v", err)
-	}
-
 	// Start consumer in a goroutine
 	go func() {
 		log.Println("Starting consumer...")
-		err := consumer.Consume(func(message []byte) error {
-			var msg Message
-			if err := UnmarshalJSON(message, &msg); err != nil {
+		err := consumer.Consume(topic, func(key, value []byte) error {
+			var msg ExampleMessage
+			if err := UnmarshalJSON(value, &msg); err != nil {
 				log.Printf("Failed to unmarshal message: %v", err)
 				return err
 			}
-			log.Printf("Processed message: ID=%s, Content=%s, Timestamp=%v", 
-				msg.ID, msg.Content, msg.Timestamp)
+			log.Printf("Processed message: Key=%s, ID=%s, Content=%s, Timestamp=%v", 
+				string(key), msg.ID, msg.Content, msg.Timestamp)
 			return nil
 		})
 		if err != nil {
@@ -65,13 +65,13 @@ func main() {
 	// Produce some messages
 	log.Println("Starting producer...")
 	for i := 0; i < 5; i++ {
-		message := Message{
+		message := ExampleMessage{
 			ID:        fmt.Sprintf("msg-%d", i+1),
 			Content:   fmt.Sprintf("Hello Kafka! Message %d", i+1),
 			Timestamp: time.Now(),
 		}
 
-		err := producer.Produce(topic, message)
+		err := producer.Produce(topic, fmt.Sprintf("msg-%d", i+1), message)
 		if err != nil {
 			log.Printf("Failed to produce message: %v", err)
 			continue
