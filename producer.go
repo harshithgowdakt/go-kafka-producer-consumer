@@ -26,6 +26,7 @@ type Producer interface {
 	Close()
 }
 
+// NewKafkaProducer creates a new Kafka producer instance with the specified configuration
 func NewKafkaProducer(config ProducerConfig) (*KafkaProducer, error) {
 	p, err := kafka.NewProducer(&kafka.ConfigMap{
 		"bootstrap.servers":     config.Brokers,
@@ -50,11 +51,13 @@ func NewKafkaProducer(config ProducerConfig) (*KafkaProducer, error) {
 	return kp, nil
 }
 
+// start initializes the producer by starting the delivery report handler goroutine
 func (kp *KafkaProducer) start() {
 	kp.wg.Add(1)
 	go kp.handleDeliveryReports()
 }
 
+// handleDeliveryReports processes delivery reports and errors from the Kafka producer in a background goroutine
 func (kp *KafkaProducer) handleDeliveryReports() {
 	defer kp.wg.Done()
 
@@ -82,6 +85,7 @@ func (kp *KafkaProducer) handleDeliveryReports() {
 	}
 }
 
+// processDeliveryReport logs the delivery status of a message (success or failure)
 func (kp *KafkaProducer) processDeliveryReport(msg *kafka.Message) {
 	if msg.TopicPartition.Error != nil {
 		slog.Error(fmt.Sprintf("Message delvery failed to topic %s [%d]: %v",
@@ -97,6 +101,7 @@ func (kp *KafkaProducer) processDeliveryReport(msg *kafka.Message) {
 	}
 }
 
+// handleKafkaError logs Kafka errors and checks for fatal errors that may require restart
 func (kp *KafkaProducer) handleKafkaError(err kafka.Error) {
 	slog.Error("Kafka Error", "error", err, "code", err.Code())
 
@@ -105,6 +110,7 @@ func (kp *KafkaProducer) handleKafkaError(err kafka.Error) {
 	}
 }
 
+// Produce sends a message to the specified Kafka topic with the given key and value
 func (kp *KafkaProducer) Produce(topic, key string, message any) error {
 	// Convert message to JSON
 	var valueByte []byte
@@ -137,6 +143,7 @@ func (kp *KafkaProducer) Produce(topic, key string, message any) error {
 	return nil
 }
 
+// Close gracefully shuts down the producer by flushing remaining messages and closing connections
 func (kp *KafkaProducer) Close() {
 	slog.Info("Flushing the remaining messages from kafka producer...")
 	unflushed := kp.producer.Flush(300000)

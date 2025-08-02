@@ -52,6 +52,7 @@ type ConsumerConfig struct {
 	BatchTimeOut       time.Duration
 }
 
+// NewKafkaConsumer creates a new Kafka consumer instance with the specified configuration
 func NewKafkaConsumer(config ConsumerConfig) (*KafkaConsumer, error) {
 	c, err := kafka.NewConsumer(&kafka.ConfigMap{
 		"bootstrap.servers":       config.Brokers,
@@ -80,6 +81,7 @@ func NewKafkaConsumer(config ConsumerConfig) (*KafkaConsumer, error) {
 	return kc, nil
 }
 
+// Consume starts consuming messages from a topic one at a time using the provided handler
 func (kc *KafkaConsumer) Consume(topic string, handler MessageHandler) error {
 	if handler == nil {
 		return fmt.Errorf("message handler can't be nil")
@@ -97,6 +99,7 @@ func (kc *KafkaConsumer) Consume(topic string, handler MessageHandler) error {
 	return nil
 }
 
+// ConsumeBatch starts consuming messages from a topic in batches using the provided batch handler
 func (kc *KafkaConsumer) ConsumeBatch(topic string, handler BatchMessageHandler) error {
 	if handler == nil {
 		return fmt.Errorf("batch message handler can't be nil")
@@ -114,11 +117,13 @@ func (kc *KafkaConsumer) ConsumeBatch(topic string, handler BatchMessageHandler)
 	return nil
 }
 
+// start initializes the consumer by starting the message consumption goroutine
 func (kc *KafkaConsumer) start() {
 	kc.wg.Add(1)
 	go kc.consumeMessages()
 }
 
+// consumeMessages polls for messages from Kafka and processes them based on the configured handler type
 func (kc *KafkaConsumer) consumeMessages() {
 	defer kc.wg.Done()
 
@@ -160,6 +165,7 @@ func (kc *KafkaConsumer) consumeMessages() {
 	}
 }
 
+// processMessage handles individual messages by calling the registered message handler
 func (kc *KafkaConsumer) processMessage(msg *kafka.Message) {
 	if msg.TopicPartition.Error != nil {
 		slog.Error("Message error from topic", 
@@ -174,6 +180,7 @@ func (kc *KafkaConsumer) processMessage(msg *kafka.Message) {
 	}
 }
 
+// addToBatch adds a message to the current batch and processes the batch if it reaches the configured size
 func (kc *KafkaConsumer) addToBatch(msg *kafka.Message) {
 	if msg.TopicPartition.Error != nil {
 		slog.Error("Error message from topic", 
@@ -201,6 +208,7 @@ func (kc *KafkaConsumer) addToBatch(msg *kafka.Message) {
 	}
 }
 
+// processBatch sends the current batch of messages to the batch handler and resets the batch
 func (kc *KafkaConsumer) processBatch() {
 	if len(kc.messageBatch) == 0 {
 		return
@@ -216,6 +224,7 @@ func (kc *KafkaConsumer) processBatch() {
 	}
 }
 
+// batchTimeOutChecker monitors batch timeout and processes incomplete batches when they exceed the timeout
 func (kc *KafkaConsumer) batchTimeOutChecker() {
 	defer kc.wg.Done()
 
@@ -236,6 +245,7 @@ func (kc *KafkaConsumer) batchTimeOutChecker() {
 	}
 }
 
+// handleKafkaError logs Kafka consumer errors and checks for fatal errors
 func (kc *KafkaConsumer) handleKafkaError(err kafka.Error) {
 	slog.Error("Kafka consumer error", "error", err, "code", err.Code())
 
@@ -244,6 +254,7 @@ func (kc *KafkaConsumer) handleKafkaError(err kafka.Error) {
 	}
 }
 
+// Close gracefully shuts down the consumer by closing connections and waiting for goroutines to finish
 func (kc *KafkaConsumer) Close() {
 	slog.Info("Closing kafka consumer....")
 
@@ -258,7 +269,7 @@ func (kc *KafkaConsumer) Close() {
 	slog.Info("Kafka consumer shutdown complete")
 }
 
-// Helper function to unmarshal JSON messages
+// UnmarshalJSON is a helper function to unmarshal JSON messages into a provided interface
 func UnmarshalJSON(data []byte, v interface{}) error {
 	return json.Unmarshal(data, v)
 }
