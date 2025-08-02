@@ -1,6 +1,6 @@
 # Go Kafka Producer Consumer
 
-A simple Go implementation of Kafka producer and consumer using the Confluent Kafka Go client.
+A Go implementation of Kafka producer and consumer using the Confluent Kafka Go client with structured logging and modern Go practices.
 
 ## Prerequisites
 
@@ -38,11 +38,21 @@ cd go-kafka-producer-consumer
 go mod tidy
 ```
 
+## Project Structure
+
+```
+├── producer.go              # Producer implementation
+├── consumer.go              # Consumer implementation  
+├── main.go                  # Usage example
+├── docker-compose.yml       # Kafka cluster setup
+└── README.md               # This file
+```
+
 ## Usage
 
-### Running the Example
+### Quick Start
 
-The main.go file demonstrates both producer and consumer functionality:
+Run the producer and consumer example:
 
 ```bash
 go run .
@@ -50,16 +60,19 @@ go run .
 
 This will:
 - Create a producer and consumer
-- Subscribe to the "test-topic"
+- Subscribe to the "test-topic" 
 - Produce 5 sample messages
 - Consume and process the messages
+
+## Implementation
 
 ### Producer
 
 ```go
 // Create producer
 producer, err := NewKafkaProducer(ProducerConfig{
-    Brokers: []string{"localhost:9092"},
+    Brokers:  "localhost:9092",
+    ClientId: "my-producer",
 })
 if err != nil {
     log.Fatalf("Failed to create producer: %v", err)
@@ -72,7 +85,7 @@ message := map[string]interface{}{
     "content": "Hello Kafka!",
 }
 
-err = producer.Produce("my-topic", message)
+err = producer.Produce("my-topic", "msg-key", message)
 if err != nil {
     log.Printf("Failed to produce message: %v", err)
 }
@@ -83,24 +96,32 @@ if err != nil {
 ```go
 // Create consumer
 consumer, err := NewKafkaConsumer(ConsumerConfig{
-    Brokers:    []string{"localhost:9092"},
-    GroupID:    "my-consumer-group",
-    AutoCommit: false,
+    Brokers:            "localhost:9092",
+    GroupID:            "my-consumer-group",
+    ClientID:           "my-consumer",
+    EnableAutoCommit:   false,
+    AutoCommitInterval: 5000,
+    BatchSize:          10,
+    BatchTimeOut:       5 * time.Second,
 })
 if err != nil {
     log.Fatalf("Failed to create consumer: %v", err)
 }
 defer consumer.Close()
 
-// Subscribe to topics
-err = consumer.Subscribe([]string{"my-topic"})
-if err != nil {
-    log.Fatalf("Failed to subscribe: %v", err)
-}
+// Consume messages individually
+err = consumer.Consume("my-topic", func(key, value []byte) error {
+    log.Printf("Received message: key=%s, value=%s", string(key), string(value))
+    return nil
+})
 
-// Consume messages
-err = consumer.Consume(func(message []byte) error {
-    log.Printf("Received message: %s", string(message))
+// Or consume messages in batches
+err = consumer.ConsumeBatch("my-topic", func(messages []Message) error {
+    log.Printf("Processing batch of %d messages", len(messages))
+    for _, msg := range messages {
+        // Process each message
+        log.Printf("Message from topic %s: %s", msg.Topic, string(msg.Value))
+    }
     return nil
 })
 ```
@@ -111,7 +132,8 @@ err = consumer.Consume(func(message []byte) error {
 
 ```go
 type ProducerConfig struct {
-    Brokers []string // List of Kafka brokers
+    Brokers  string // Kafka brokers (e.g., "localhost:9092")
+    ClientId string // Client identifier
 }
 ```
 
@@ -119,75 +141,86 @@ type ProducerConfig struct {
 
 ```go
 type ConsumerConfig struct {
-    Brokers    []string // List of Kafka brokers
-    GroupID    string   // Consumer group ID
-    AutoCommit bool     // Enable/disable auto commit
+    Brokers            string        // Kafka brokers
+    GroupID            string        // Consumer group ID
+    ClientID           string        // Client identifier
+    EnableAutoCommit   bool          // Enable/disable auto commit
+    AutoCommitInterval int           // Auto commit interval in milliseconds
+    BatchSize          int           // Batch size for batch processing
+    BatchTimeOut       time.Duration // Batch timeout
 }
+```
+
+## Running Kafka Locally
+
+### Using Docker Compose
+
+A `docker-compose.yml` file is included for easy local development:
+
+```bash
+# Start Kafka cluster with Zookeeper and Kafka UI
+docker-compose up -d
+
+# Check status
+docker-compose ps
+
+# View logs
+docker-compose logs -f kafka
+
+# Stop services
+docker-compose down
+```
+
+Services included:
+- **Kafka**: Main broker (port 9092)
+- **Zookeeper**: Coordination service (port 2181)
+- **Kafka UI**: Web interface (http://localhost:8080)
+
+### Create Topics
+
+```bash
+# Using Docker
+docker exec -it kafka kafka-topics --create --topic test-topic --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1
+
+# List topics
+docker exec -it kafka kafka-topics --list --bootstrap-server localhost:9092
+
+# Describe topic
+docker exec -it kafka kafka-topics --describe --topic test-topic --bootstrap-server localhost:9092
 ```
 
 ## Features
 
-- **Producer:**
-  - JSON message serialization
-  - Delivery report handling
-  - Error handling and logging
-  - Configurable broker list
+### Producer Features
+- **Structured Logging**: Uses slog for JSON logging
+- **Message Serialization**: Automatic JSON marshaling for complex types
+- **Delivery Reports**: Tracks message delivery success/failure
+- **Configurable Settings**: Compression, retries, idempotence
+- **Error Handling**: Comprehensive error reporting
+- **Graceful Shutdown**: Proper message flushing on close
 
-- **Consumer:**
-  - Topic subscription
-  - Configurable consumer groups
-  - Manual and auto commit options
-  - Message processing with error handling
-  - Graceful shutdown
-
-## Running Kafka Locally
-
-If you need to run Kafka locally for testing:
-
-### Using Docker Compose
-
-Create a `docker-compose.yml` file:
-
-```yaml
-version: '3'
-services:
-  zookeeper:
-    image: confluentinc/cp-zookeeper:latest
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-
-  kafka:
-    image: confluentinc/cp-kafka:latest
-    depends_on:
-      - zookeeper
-    ports:
-      - 9092:9092
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-```
-
-Start Kafka:
-```bash
-docker-compose up -d
-```
-
-### Create a Test Topic
-
-```bash
-# Using Kafka CLI tools
-kafka-topics --create --topic test-topic --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1
-
-# Or using Docker
-docker exec -it <kafka-container-id> kafka-topics --create --topic test-topic --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1
-```
+### Consumer Features
+- **Individual Processing**: Process messages one by one
+- **Batch Processing**: Process messages in configurable batches
+- **Manual Commit**: Fine-grained offset control
+- **Message Headers**: Access to Kafka message headers
+- **Error Handling**: Robust error handling and logging
+- **Graceful Shutdown**: Clean consumer shutdown
+- **Timeout Handling**: Configurable polling and batch timeouts
 
 ## Dependencies
 
 - [confluent-kafka-go](https://github.com/confluentinc/confluent-kafka-go) - Confluent's Apache Kafka Go client
+- Go standard library packages for concurrency, logging, and JSON handling
+
+## Example
+
+See `main.go` for a complete example that demonstrates:
+- Producer and consumer creation
+- Message production with different data types
+- Individual and batch message consumption
+- Proper error handling and logging
+- Graceful shutdown
 
 ## License
 
