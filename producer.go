@@ -3,36 +3,38 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 )
 
-type Producer interface {
-	Produce(topic string, message interface{}) error
-	Close() error
-}
-
 type KafkaProducer struct {
 	producer *kafka.Producer
 	done     chan bool
+	wg       sync.WaitGroup
 }
 
 type ProducerConfig struct {
-	Brokers []string
+	Brokers  string
+	ClientId string
+}
+
+type Producer interface {
+	Produce(topic string, key string, message any) error
+	Close()
 }
 
 func NewKafkaProducer(config ProducerConfig) (*KafkaProducer, error) {
-	brokers := ""
-	for i, broker := range config.Brokers {
-		if i > 0 {
-			brokers += ","
-		}
-		brokers += broker
-	}
-
 	p, err := kafka.NewProducer(&kafka.ConfigMap{
-		"bootstrap.servers": brokers,
+		"bootstrap.servers":     config.Brokers,
+		"client.id":             config.ClientId,
+		"acks":                  "all",
+		"retries":               10,
+		"compression.type":      "gzip",
+		"enable.idempotence":    true,
+		"broker.address.family": "v4",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create producer: %w", err)
@@ -43,36 +45,89 @@ func NewKafkaProducer(config ProducerConfig) (*KafkaProducer, error) {
 		done:     make(chan bool),
 	}
 
-	// Start delivery report handler
-	go kp.handleDeliveryReports()
+	kp.start()
 
 	return kp, nil
 }
 
+func (kp *KafkaProducer) start() {
+	kp.wg.Add(1)
+	go kp.handleDeliveryReports()
+}
+
 func (kp *KafkaProducer) handleDeliveryReports() {
-	for e := range kp.producer.Events() {
-		switch ev := e.(type) {
-		case *kafka.Message:
-			if ev.TopicPartition.Error != nil {
-				log.Printf("Delivery failed: %v\n", ev.TopicPartition)
-			} else {
-				log.Printf("Delivered message to %v\n", ev.TopicPartition)
+	defer kp.wg.Done()
+
+	for {
+		select {
+		case <-kp.done:
+			slog.Info("Shutting down the handleDeliveryReports")
+			return
+		case e := <-kp.producer.Events():
+			if e == nil {
+				slog.Info("Producer channel close")
+				return
+			}
+
+			switch ev := e.(type) {
+			case *kafka.Message:
+				kp.processDeliveryReport(ev)
+			case kafka.Error:
+				kp.handleKafkaError(ev)
+
+			default:
+				//ingnore other message
 			}
 		}
 	}
 }
 
-func (kp *KafkaProducer) Produce(topic string, message interface{}) error {
+func (kp *KafkaProducer) processDeliveryReport(msg *kafka.Message) {
+	if msg.TopicPartition.Error != nil {
+		slog.Error(fmt.Sprintf("Message delvery failed to topic %s [%d]: %v",
+			*msg.TopicPartition.Topic,
+			msg.TopicPartition.Partition,
+			msg.TopicPartition.Error,
+		))
+	} else {
+		slog.Info(fmt.Sprintf("Message delivered to topic %s [%d] at offset %v",
+			*msg.TopicPartition.Topic,
+			msg.TopicPartition.Partition,
+			msg.TopicPartition.Offset))
+	}
+}
+
+func (kp *KafkaProducer) handleKafkaError(err kafka.Error) {
+	slog.Error("Kafka Error: %v (code: %d)", err, err.Code())
+
+	if err.IsFatal() {
+		slog.Error("FATAL kafka error: producer mas need to restart: %v", err)
+	}
+}
+
+func (kp *KafkaProducer) Produce(topic, key string, message any) error {
 	// Convert message to JSON
-	msgBytes, err := json.Marshal(message)
-	if err != nil {
-		return fmt.Errorf("failed to marshal message: %w", err)
+	var valueByte []byte
+	var err error
+	switch m := message.(type) {
+	case []byte:
+		valueByte = m
+	case string:
+		valueByte = []byte(m)
+	default:
+		valueByte, err = json.Marshal(m)
+		if err != nil {
+			return fmt.Errorf("failed to marshal value: %v", err)
+		}
+
 	}
 
 	// Produce message
 	err = kp.producer.Produce(&kafka.Message{
 		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
-		Value:          msgBytes,
+		Value:          valueByte,
+		Key:            []byte(key),
+		Timestamp:      time.Now(),
 	}, nil)
 
 	if err != nil {
@@ -82,8 +137,14 @@ func (kp *KafkaProducer) Produce(topic string, message interface{}) error {
 	return nil
 }
 
-func (kp *KafkaProducer) Close() error {
+func (kp *KafkaProducer) Close() {
+	slog.Info("Flushing the remaining messages from kafka producer...")
+	unflushed := kp.producer.Flush(300000)
+	if unflushed > 0 {
+		slog.Error("Failed to flush %d messages", unflushed)
+	}
+
 	close(kp.done)
 	kp.producer.Close()
-	return nil
+	kp.wg.Wait()
 }
